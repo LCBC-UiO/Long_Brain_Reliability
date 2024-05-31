@@ -1,0 +1,1000 @@
+---
+title: "p039_normative_postproc"
+author: "DVP"
+date: "2022.12.12"
+output: html_document
+---
+
+# merge normative data. extract QR info, compare with different calibration options
+# setup
+## dirs and libraries
+```{r setusp, }
+library(psych)
+library(multcomp)
+library(here)
+library(rio)
+library(lmerTest)
+library(patchwork)
+library(viridis)
+library(ggseg)
+library(kableExtra)
+library(emmeans)
+library(broom)
+library(tidyverse)
+options(bitmapType = "cairo")
+source(here("scripts/reliability_scripts/helper_reliability_postproc_v2.r"))
+
+# set dirs
+outdir=here('data_reliability_long/df_mri/all')
+analysis = 'single_rois'
+outreliability = file.path(outdir, "empirical")
+outreliability.comp = file.path(outdir, "computational")
+try(dir.create(outreliability))
+try(dir.create(outreliability.comp))
+try(dir.create(file.path(outreliability.comp, analysis)))
+theme_set(theme_minimal())
+```
+
+## files and features
+```{r files and features}
+df.harmonize = import(file.path(outdir, 'harmonize_variables.xlsx'))
+df.harmonize = df.harmonize %>% dplyr::select(normative_modelling, modality)
+names(df.harmonize)[1] = "feature"
+
+df.parameters = import(here('data_reliability_long/df_mri/all/computational_parameters.xlsx')) %>% 
+  mutate(sele_mean_mean = as.numeric(sele_mean_mean),
+         sele_mean_sd = as.numeric(sele_mean_sd), 
+         slee_change_var = as.numeric(slee_change_var),
+         `Sele:mean_change7` = as.numeric(`Sele:mean_change7`))
+df.parameters = left_join(df.parameters, df.harmonize)
+
+rm_vars_error = retrieve_rm_vars_error()
+rm_globalvars_error = retrieve_rm_globalVars_error()
+```
+
+## define models
+```{r open models}
+# define model1 
+modelname = "model1"
+df.model = 
+  df.parameters %>% 
+  dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5, 
+                sdDelta, 
+                pct.err.mean_all)
+
+ df.model = rename_model(df.model)
+ write.csv(df.model,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = ".")))
+ 
+# define model2
+modelname="model2"
+df.model = 
+  df.parameters %>% 
+  dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5,
+                madDelta_cross, 
+                pct.err.mean_all_cross)
+
+ df.model = rename_model(df.model)
+ write.csv(df.model,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = ".")))
+
+ # merge models
+model1 = import(file.path(outreliability.comp, "model1.csv")) %>% 
+  mutate(model = "model1")
+model2 = import(file.path(outreliability.comp, "model2.csv")) %>% 
+  mutate(model = "model2")
+
+model = rbind(model1, model2)
+model = 
+  model %>%
+  rowwise() %>% 
+  mutate(f = gsub(paste0("_",modality), "", feature))
+```
+
+# Reliability - Based on Formula
+## icc - formula
+```{r}
+df.formula.icc = expand.grid(feature = unique(model$feature),
+            model = unique(model$model), 
+            t = seq(3,9,by = 2), 
+            total_time = seq(2,12, by =2)) %>% 
+  left_join(model, .) %>% 
+  mutate(ws = meanE^2*((total_time^2*t*(t+1))/ (12*(t-1)))^-1, 
+         bs = seD^2, 
+         icc = bs /(ws + bs))
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.rda"))
+
+# ws within-subject variability
+  # for equispaced timepoints
+   #e² / (t²*n*(n-1)/12*(n-1)
+   # e = error
+   # t = time
+   # n = number of timepoints
+
+  # bs = var(bs) = sd² = seD²
+
+
+#ICC(2,1) = bs² / bs² + ws 
+# in the context of long trajectories 
+
+df.formula.icc = 
+  df.formula.icc %>%
+  mutate(sd_error = sqrt(ws), 
+         mean1 = meanD + seD, 
+         mean2 = meanD - seD)
+
+df.formula.icc = compute_overlap(df.formula.icc)
+df.formula.icc =df.formula.icc %>% ungroup()
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.rda"))
+```
+
+## icc - formula - globalvars
+```{r globalvars}
+modelname = "model1_global"
+df.model1 = 
+  df.parameters %>% 
+   dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5, 
+                sdDelta, 
+                pct.err.mean_all)
+
+ df.model1 = rename_model(df.model1, globalVars = T)
+ write.csv(df.model1,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = ".")))
+ 
+# modelname="model2_global"
+# df.model2 = 
+#   df.parameters %>% 
+#   dplyr::select(feature, 
+#                 modality, 
+#                 mean_70y, 
+#                 sd1, 
+#                 ch5,
+#                 madDelta, 
+#                 pct.err.median_all)
+# 
+# df.model2 = rename_model(df.model2, globalVars = T)
+#  write.csv(df.model2,
+#             file = file.path(outreliability.comp, 
+#                              paste(modelname, 
+#                                    "csv",
+#                                    sep = ".")))
+
+model1 = import(file.path(outreliability.comp, "model1_global.csv")) %>% 
+  mutate(model = "model1")
+# model2 = import(file.path(outreliability.comp, "model2_global.csv")) %>% 
+#   mutate(model = "model2")
+
+#model = rbind(model1, model2)
+model = model1
+model = 
+  model %>% 
+  rowwise() %>% 
+  mutate(modality = if_else(feature == "MeanThickness", "thickness",
+                            if_else(feature == "CorticalArea", "area",
+                                    if_else(feature == "SubCorticalVolume", "svolume", "volume"))),
+         f = gsub(paste0("_",modality), "", feature))
+
+df.formula.icc = expand.grid(feature = unique(model$feature),
+            model = unique(model$model), 
+            t = seq(3,9,by = 2), 
+            total_time = seq(2,12, by =2)) %>% 
+  left_join(model, .) %>% 
+  mutate(ws = meanE^2*((total_time^2*t*(t+1))/ (12*(t-1)))^-1, 
+         bs = seD^2, 
+         icc = bs /(ws + bs))
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.global.rda"))
+
+
+df.formula.icc = 
+  df.formula.icc %>%
+  mutate(sd_error = sqrt(ws), 
+         mean1 = meanD + seD, 
+         mean2 = meanD - seD)
+
+df.formula.icc = compute_overlap(df.formula.icc)
+df.formula.icc =df.formula.icc %>% ungroup()
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.global.rda"))
+```
+
+## icc - formula - agegroupcomarisons
+```{r globalvars}
+modelname = "model1_Young"
+df.model1 = 
+  df.parameters %>% 
+   dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5, 
+                sdDelta_Y, 
+                pct.err.mean_all)
+
+ df.model1 = rename_model(df.model1)
+ write.csv(df.model1,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = ".")))
+ 
+modelname="model2_Young"
+df.model2 = 
+  df.parameters %>% 
+  dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5,
+                madDelta_Y, 
+                pct.err.median_all)
+
+df.model2 = rename_model(df.model2)
+ write.csv(df.model2,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = ".")))
+ 
+modelname = "model1_Old"
+df.model1 = 
+  df.parameters %>% 
+   dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5, 
+                sdDelta_O, 
+                pct.err.mean_all)
+
+ df.model1 = rename_model(df.model1)
+ write.csv(df.model1,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = ".")))
+ 
+modelname="model2_Old"
+df.model2 = 
+  df.parameters %>% 
+  dplyr::select(feature, 
+                modality, 
+                mean_70y, 
+                sd1, 
+                ch5,
+                madDelta_O, 
+                pct.err.median_all)
+
+df.model2 = rename_model(df.model2)
+ write.csv(df.model2,
+            file = file.path(outreliability.comp, 
+                             paste(modelname, 
+                                   "csv",
+                                   sep = "."))) 
+
+model1 = import(file.path(outreliability.comp, "model1_Young.csv")) %>% 
+  mutate(model = "model1_Young")
+model2 = import(file.path(outreliability.comp, "model2_Young.csv")) %>% 
+  mutate(model = "model2_Young")
+model3 = import(file.path(outreliability.comp, "model1_Old.csv")) %>% 
+  mutate(model = "model1_Old")
+model4 = import(file.path(outreliability.comp, "model2_Old.csv")) %>% 
+  mutate(model = "model2_Old")
+
+model = reduce(list(model1, model2, model3, model4), rbind)
+
+model = 
+  model %>%
+  rowwise() %>% 
+  mutate(f = gsub(paste0("_",modality), "", feature))
+
+df.formula.icc = expand.grid(feature = unique(model$feature),
+            model = unique(model$model), 
+            t = seq(3,9,by = 2), 
+            total_time = seq(2,12, by =2)) %>% 
+  left_join(model, .) %>% 
+  mutate(ws = meanE^2*((total_time^2*t*(t+1))/ (12*(t-1)))^-1, 
+         bs = seD^2, 
+         icc = bs /(ws + bs))
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.agegroup.rda"))
+
+
+df.formula.icc = 
+  df.formula.icc %>%
+  mutate(sd_error = sqrt(ws), 
+         mean1 = meanD + seD, 
+         mean2 = meanD - seD)
+
+df.formula.icc = compute_overlap(df.formula.icc)
+df.formula.icc =df.formula.icc %>% ungroup()
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.agegroup.rda"))
+```
+## icc - reliability between datasets
+```{r}
+# script for computing reliability across different datasets 
+string.meas = "pct.err.mean_"
+dat.me = wrapper_select_parameter_reliability(df.parameters, string.meas)
+string.meas = "sdDelta_"
+dat.slopeV = wrapper_select_parameter_reliability(df.parameters, string.meas)
+
+#dat.pairwise.icc.slope = pairwise.icc.parameters(dat.slopeV)
+#dat.pairwise.icc.me = pairwise.icc.parameters(dat.me)
+df.formula.icc = icc_reliability_full(dat.me, dat.slopeV)
+df.icc.reliability.pairwise = pairwise.reliability.icc(df.formula.icc)
+df.icc.reliability.icc2 = icc2.reliability.icc(df.formula.icc)
+#dat.one2all.icc.slope = one2all.icc.parameters(dat.slopeV)
+#dat.one2all.icc.me = one2all.icc.parameters(dat.me)
+#dat.one2all.icc.reliability = one2all.icc.reliability(df.formula.icc)
+
+save(dat.me, 
+     dat.slopeV, 
+     #dat.pairwise.icc.me, 
+     #dat.pairwise.icc.slope, 
+     df.formula.icc, 
+     df.icc.reliability.pairwise, 
+     df.icc.reliability.icc2,
+     #dat.one2all.icc.me,
+     #dat.one2all.icc.reliability,
+     file = file.path(outreliability.comp, "icc_reliability_between_samples.Rda"))
+
+```
+
+## power analysis - sample size calculator
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+
+df.statstest  =
+tribble(
+  ~StatTest, ~effectsize,
+  "two_sample",   .2,
+  "two_sample",   .5,
+  "two_sample",   .8,
+  "rpearson",     .1,
+  "rpearson",     .3,
+  "rpearson",     .5,
+  "anova3l",      .1,
+  "anova3l",      .25,
+  "anova3l",      .4, 
+)
+
+power = data.frame(power = .8)
+df.statstest = crossing(df.statstest, power)
+
+
+df.formula.icc =  sample_size_wrapper(df.formula.icc, df.statstest)
+
+save(df.formula.icc, file = file.path(outreliability.comp, "icc.formula.rda"))
+```
+
+##individual trajectories and brain maintenance 
+```{r}
+model = model1
+wrapper_individual_trajectories()
+```
+
+# simulation
+## model1 - singler rois
+```{r prepare model1}
+# model 1 - sammple + s2c error
+wrapper_submit_model(model1, "model1", 1000, 100, outreliability.comp, analysis) 
+
+df.comp.model1 = summary_computational_model("model1", "single_rois", outreliability.comp)
+#gs = plot_computational(outreliability.comp, modelname)
+```
+
+
+##model2 - single rois
+```{r}
+# model 2 - sele + hedges
+wrapper_submit_model(model2, "model2", 1000, 100, outreliability.comp, analysis) 
+
+df.comp.model2 = summary_computational_model("model2", "single_rois", outreliability.comp)
+#gs = plot_computational(outreliability.comp, modelname)
+```
+
+# empirical
+## empirical - std.error
+```{r compute empirical}
+load(file.path(outdir, "df.merged.Rda"))
+
+outliers = df$outliers$delta$idx[df$outliers$delta$rmsubs.miss.data,]
+delta = df$df$delta$df[df$outliers$delta$rmsubs.miss.data,]
+se = df$df$delta$se[df$outliers$delta$rmsubs.miss.data,]  
+se[!outliers] = NaN
+db = df$df$base$df[df$outliers$delta$rmsubs.miss.data,] %>% 
+  mutate(total_time = time, 
+         tps = n)
+
+
+# remove outliers
+se = prepare_se_data(se,db) 
+
+df.se = 
+  cbind(
+    db %>% filter(n >2, time > 2),
+    se)
+
+# start routine
+phenos.se = names(se)[!grepl("IntraCran", names(se))]
+df.emp = glmer_empirical(df.se, phenos.se, outreliability, df.harmonize)
+```
+
+
+## empirical to icc
+```{r}
+load(file.path(outdir, "df.merged.Rda"))
+load(file.path(outreliability, "df.empirical.Rda"))
+
+#load(file.path(outreliability, "df.empirical.slope.Rda"))
+dat.model1 = get_simulated_results(outreliability.comp , "model1")
+#dat.model2 = get_simulated_results(outreliability.comp , "model2")
+#dat.simulation = rbind(dat.model1, dat.model2)
+dat.simulation = dat.model1
+dat.simulation = 
+  dat.simulation %>% 
+  mutate(t = as.numeric(as.character(tps)), 
+         ws =  meanE^2*((total_time^2*t*(t+1))/ (12*(t-1)))^-1,
+         beta_rmse = 100*beta_rmse/meanF, 
+         avg_beta_se = 100*avg_beta_se/meanF,
+         seD.obs = 100*seD.obs/meanF, 
+         seD.real = 100*seD.real/meanF, 
+         seD.obs2 = seD.obs ^2, 
+         seD.real2 = seD.real ^2)
+
+
+# relationship bettwen observed and real within subject variance
+mod = lm(beta_rmse ~ avg_beta_se + avg_beta_se:log(t), data = dat.simulation)
+summary(mod)
+
+# relationship between variance and observed variance in slope (due to error propagaaaaaation)
+#mod1 = lm(seD.real2 ~ seD.obs2*ws, data = dat.simulation)
+#summary(mod1)
+
+ # sd.delta = apply(delta[db$n >2 & db$time > 2,], 2, sd, na.rm = T)
+ # xx = data.frame(
+ #   feature = names(delta), 
+ #   seD = sd.delta)
+
+ xx = data.frame(feature = model1$feature, 
+                 seD = model1$seD)
+x = 
+df.emp$df.out.grid.glmer %>% 
+drop_na() %>% 
+  filter(!feature %in% rm_vars_error)
+
+df.emp.out = left_join(x,xx) %>% 
+  rename("t" = "tps", 
+         "avg_beta_se" = "fit")
+df.emp.out$beta_rmse = predict(mod, df.emp.out)
+df.emp.out$ws = df.emp.out$beta_rmse^2
+
+
+df.emp.out = 
+  df.emp.out %>%
+  rowwise() %>% 
+  mutate(f = gsub(paste0("_",modality), "", feature))
+
+
+df.emp.out = 
+  df.emp.out %>% 
+ mutate(bs = seD^2, 
+         icc = bs /(ws + bs))
+
+save(df.emp.out, file = file.path(outreliability, "df.empirical_summary.Rda"))
+```
+
+```{r}
+load(file = file.path(outreliability, "df.empirical_summary.Rda"))
+
+df.statstest  =
+tribble(
+  ~StatTest, ~effectsize,
+  "two_sample",   .2,
+  "two_sample",   .5,
+  "two_sample",   .8,
+  "rpearson",     .1,
+  "rpearson",     .3,
+  "rpearson",     .5,
+  "anova3l",      .1,
+  "anova3l",      .25,
+  "anova3l",      .4, 
+)
+
+power = data.frame(power = .8)
+df.statstest = crossing(df.statstest, power)
+
+df.emp.out = 
+  df.emp.out %>% mutate(model = "empirical")
+df.emp.out=  sample_size_wrapper(df.emp.out, df.statstest)
+
+save(df.emp.out, file = file.path(outreliability, "df.empirical_summary.Rda"))
+```
+
+# Plots and figures
+
+## Fig. scheme
+```{r Fig. scheme}
+gs = wrapper_figure_scheme()
+```
+## Fig main reliability
+```{r}
+outreliability.comp="/ess/p274/cluster/projects/p039_image_brain_change/data_reliability_long/df_mri/all/computational"
+load(file.path(outreliability.comp, "icc.formula.rda"))
+load( file.path(outreliability, "df.empirical_summary.Rda"))
+# Figure main model 
+
+oname = "model1"
+df.fig = 
+  df.formula.icc %>% 
+  filter(model == oname)
+
+gs1 = fig_mean_icc(df.fig, oname)
+gs1.1 = fig_mean_icc_modality(df.fig, oname)
+
+# Figurereplication model
+oname = "model2"
+df.fig = 
+  df.formula.icc %>% 
+  filter(model == oname)
+
+gs2 = fig_mean_icc(df.fig, oname)
+gs2.1 = fig_mean_icc_modality(df.fig, oname)
+
+gs3 = fig_mean_icc(df.emp.out,"empirical")
+gs2.1 = fig_mean_icc_modality(df.emp.out, "empirical")
+```
+
+## Fig. regional variability
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+load( file.path(outreliability, "df.empirical_summary.Rda"))
+fu=4
+t=3
+
+# model1
+mdl = "model1"
+oname = paste(mdl,"fu" ,fu,"n", t,sep =".")
+
+df.ggseg = 
+  df.formula.icc %>% 
+  filter(model == mdl, 
+         total_time == fu, 
+         t == 3) %>% 
+  rename("label" = "f")
+
+fig_icc_regional(df.ggseg, oname)
+
+# model2
+mdl = "model2"
+oname = paste(mdl,"fu" ,fu,"n", t,sep =".")
+
+df.ggseg = 
+  df.formula.icc %>% 
+  filter(model == mdl, 
+         total_time == fu, 
+         t == 3) %>% 
+  rename("label" = "f")
+fig_icc_regional(df.ggseg, oname)
+
+
+# empirical
+mdl = "empirical"
+oname = paste(mdl,"fu" ,fu,"n", t,sep =".")
+
+df.ggseg = 
+  df.emp.out%>% 
+  filter(total_time == fu, 
+         t == 3) %>% 
+  rename("label" = "f")
+fig_icc_regional(df.ggseg, oname)
+```
+
+## Fig. diff in icc across models
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+tps = c(3,7)
+time = c(2,6)
+oname = "model2"
+df.diff = df.formula.icc %>% 
+  dplyr::select(feature, modality, icc, f,t, total_time, model) %>% 
+  pivot_wider(names_from = model, values_from = icc) %>% 
+  drop_na() %>% 
+  mutate(diff = model1 - model2, 
+                   adiff = abs(diff))
+
+dat = 
+df.diff %>% 
+  group_by(feature, modality, f) %>% 
+  summarise(model1 = mean(model1), 
+         model2 = mean(model2), 
+         diff = mean(diff), 
+         adiff = mean(adiff)) %>% 
+  ungroup() %>% drop_na() %>% 
+  rename("label" = "f") 
+
+fig_icc_diffs(df.diff, oname)
+fig_icc_diffs_sp(df.diff, oname)
+#fig_icc_diffs_sp_set_design(df.diff, oname, time, tps) 
+fig_icc_regional_difference(dat, oname)
+fig_mean_icc_diff(df.diff,"model2.v.1")
+
+# empirical
+oname = "empirical"
+
+load(file.path(outreliability.comp, "icc.formula.rda"))
+load( file.path(outreliability, "df.empirical_summary.Rda"))
+ dat = df.formula.icc %>% 
+   filter(model == "model1") %>% 
+   select(feature, modality, icc, f,t, total_time, model)
+dat1 = df.emp.out %>% 
+  mutate(model = "empirical") %>% 
+  select(feature, modality, icc, f,t, total_time, model)
+
+df.diff = full_join(dat, dat1) 
+df.diff = df.diff %>% 
+  select(feature, modality, icc, f,t, total_time, model) %>% 
+  pivot_wider(names_from = model, values_from = icc) %>% 
+  drop_na() %>% 
+  mutate(diff = model1 -empirical, 
+                   adiff = abs(diff))
+
+dat = 
+df.diff %>% 
+  group_by(feature, modality, f) %>% 
+  summarise(model1 = mean(model1), 
+         empirical = mean(empirical), 
+         diff = mean(diff), 
+         adiff = mean(adiff)) %>% 
+  ungroup() %>% drop_na() %>% 
+  rename("label" = "f") 
+
+fig_icc_diffs(df.diff, oname)
+fig_icc_diffs_sp(df.diff, oname)
+#fig_icc_diffs_sp_set_design(df.diff, oname, 4, 3) 
+fig_icc_regional_difference(dat, oname)
+fig_mean_icc_diff(df.diff,"modele.v.1")
+
+
+## between datasets
+load(file.path(outreliability.comp, "icc_reliability_between_samples.Rda"))
+figure_icc_across_datasets(df.icc.reliability.icc2, df.icc.reliability.pairwise)
+
+```
+
+## Fig. model_parameter comparison
+```{r}
+load(file.path(outreliability.comp, "icc_reliability_between_samples.Rda"))
+gs = figure_icc_parameters(dat.me, dat.slopeV)
+gs = figure_icc_parameters_bymodality(dat.me, dat.slopeV)
+
+gs = fig_pairwise.icc.parameters(dat.slopeV, "slope")
+gs = fig_pairwise.icc.parameters(dat.me, "me")
+```
+
+## Fig. equivalence between formula, simulation and empirical models
+Fig. Relationship between avg_beta_se and rmse_beta
+Fig. Relationship between icc from simulation and from formula
+```{r}
+load( file.path(outreliability.comp, "icc.formula.rda"))
+dat.model1 = get_simulated_results(outreliability.comp , "model1")
+#dat.model2 = get_simulated_results(outreliability.comp , "model2")
+#dat = rbind(dat.model1, dat.model2)
+dat = dat.model1
+dat = 
+dat %>% 
+  mutate(t = as.numeric(as.character(tps)), 
+         ws =  meanE^2*((total_time^2*t*(t+1))/ (12*(t-1)))^-1,
+         beta_rmse = 100*beta_rmse/meanF, 
+         avg_beta_se = 100*avg_beta_se/meanF)
+
+gs = fig_corresponce_ws(dat)
+gs = fig_compare_icc_form_sim(df.formula.icc, dat)
+```
+
+## Fig individual overlap of observations
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+tps = c(3,7)
+ttime = c(2,6, 10)
+phenos =unique(df.formula.icc$feature)
+
+
+fig_bc_overlap()
+
+for (pheno in phenos) {
+dat = 
+  df.formula.icc %>% 
+    filter(feature == pheno, 
+          t %in% tps, 
+          total_time %in% ttime) 
+  fig_individual_overlap(dat, pheno)
+}
+
+```
+
+## Fig. Maintenance
+```{r}
+phenotypes.m = 
+  c("Left-Lateral-Ventricle", 
+    "Left-Hippocampus", 
+    "lh_entorhinal_thickness",
+    "Right-Lateral-Ventricle", 
+    "Right-Hippocampus",
+    "rh_entorhinal_thickness")
+model1 = import(file.path(outreliability.comp, "model1.csv")) %>% 
+  mutate(model = "model1")
+
+for (ft in phenotypes.m) {
+  print(ft)
+  gs = fig_maintainer(model1, ft) 
+}
+
+```
+
+
+## Fig global variables
+```{r}
+gs = fig_icc_globalvars()
+gss = fig_parameters_globalvars()
+```
+## Fig. agegroup comparison
+```{r}
+
+load(file.path(outreliability.comp, "icc.formula.agegroup.rda"))
+mdl = c("model1_Young", "model1_Old")
+
+for (p in phenos) {
+  gs = fig_agegroupcomparison(df.formula.icc, p, mdl)
+}
+```
+## fig sample size - mean & regional
+```{r}
+# mean sample size
+load(file.path(outreliability.comp, "icc.formula.rda"))
+load( file.path(outreliability, "df.empirical_summary.Rda"))
+
+oname = "model1"
+
+gs = fig_sample_size_mean(df.formula.icc, oname)
+
+oname = "model2"
+gs = fig_sample_size_mean(df.formula.icc, oname)
+
+
+oname = "empirical"
+gs = fig_sample_size_mean(df.emp.out, oname)
+
+
+
+
+# regional sample size
+load(file.path(outreliability.comp, "icc.formula.rda"))
+dat = df.formula.icc
+model = "model1"
+
+phenotypes.samplesize = 
+  c("Left-Lateral-Ventricle", 
+    "Left-Hippocampus", 
+    "lh_entorhinal_thickness",
+    "Right-Lateral-Ventricle", 
+    "Right-Hippocampus",
+    "rh_entorhinal_thickness")
+
+for (ft in phenotypes.samplesize) {
+  print(ft)
+  gs = fig_sample_size_region_tps(df.formula.icc, ft, model, tps = c(3,7)) 
+}
+```
+## Fig. descriptives
+```{r fig descriptives}
+#longitudinal aging dataset
+load(file.path(outdir, "df.all.filt.Rda"))
+gs = fig_linechart(df.merge, "lifespan_full")
+gs = fig_raincloud(df.merge, "lifespan_full")
+db = df$df$base$df[df$outliers$delta$rmsubs.miss.data,]
+gs = fig_hist_tps(db, "lifespan_full")
+
+# empirical subset
+load(file.path(outdir, "df.merged.Rda"))
+db = df$df$base$df[df$outliers$delta$rmsubs.miss.data,]
+db =
+  db %>% 
+  mutate(total_time = time, 
+         tps = n) %>% 
+  filter(n >2, time > 2)
+dat = df.merge.long %>% 
+  filter(rid %in% db$rid)
+gs = fig_linechart(dat, "empirical")
+gs = fig_raincloud(dat, "empirical")
+gs = fig_hist_tps(db, "empirical")
+
+# slope variance
+load(file.path(outdir, "df.merged.Rda"))
+db = df$df$base$df[df$outliers$delta$rmsubs.miss.data,]
+db =
+  db %>% 
+  mutate(total_time = time, 
+         tps = n) %>% 
+  filter(n >3, time > 4)
+dat = df.merge.long %>% 
+  filter(rid %in% db$rid)
+gs = fig_linechart(dat, "slope")
+gs = fig_raincloud(dat, "slope")
+gs = fig_hist_tps(db, "slope")
+
+```
+
+
+# Tables and stats data in mn
+## Results section
+### Reliability of longitudinal brain change: Simulated data.
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+oname = "model1"
+wrapper_table_aov(df.formula.icc, oname)
+```
+
+### Determinants of longitudinal reliability (II): Preprocessing stream.
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+oname = "model2"
+wrapper_table_aov(df.formula.icc, oname)
+```
+### Reliability of longitudinal brain change: Estimations based on empirical data.
+```{r}
+load( file.path(outreliability, "df.empirical_summary.Rda"))
+oname = "empirical"
+df.emp.out = 
+  df.emp.out %>% 
+  mutate(model = oname) %>% 
+  ungroup()
+wrapper_table_aov(df.emp.out, oname)
+```
+
+### Consistency of parameters and reliability estimates across datasets. 
+```{r}
+wrapper_table_parameter_comparison()
+
+
+ load(file.path(outreliability.comp, "icc_reliability_between_samples.Rda"))
+  
+  grot = list()
+  grot[[1]] = df.icc.reliability.icc2 %>%
+    summarise(iccM = mean(icc),
+              sd = sd(icc),
+              icc.type = "ICC2") %>% 
+    mutate(analysis = "global")
+
+  grot[[2]] =
+    df.icc.reliability.pairwise %>%
+    summarise(iccM = mean(icc),
+              sd = sd(icc),
+              icc.type = "ICC(2,1)")  %>% 
+    mutate(analysis = "global")
+
+
+  grot[[3]] =
+    df.icc.reliability.icc2 %>%
+    unnest(data) %>%
+    select(t, total_time, icc.sub) %>%
+      summarise(iccM = mean(icc.sub), 
+              sd = sd(icc.sub), 
+              icc.type = "ICC2")  %>% 
+    mutate(icc.type = "ICC2",
+           analysis = "regional")
+
+
+  grot[[4]] =
+    df.icc.reliability.pairwise %>%
+    unnest(data) %>%
+    select(t, total_time, icc.sub) %>%
+    summarise(mean(icc.sub), sd(icc.sub))  %>% 
+    mutate(icc.type = "ICC(2,1)",
+           analysis = "regional")
+  
+  icc.sumary.between.datasets.com = data.table::rbindlist(grot)
+  k1 = icc.sumary.between.datasets.com  %>% 
+    kable(digits = 2) %>% 
+    kable_styling(full_width = FALSE) 
+  fname = here("data_reliability_long/results/stats_and_tables/model_comparison", 
+               paste("ICC_summary_comparison_between_datasets","html", sep = "."))
+  save_kable(k1, fname)
+  
+  
+  grot =list()
+   grot[[1]] =
+    df.icc.reliability.icc2 %>%
+    unnest(data) %>%
+    select(t, total_time, icc.sub) %>%
+     group_by(t, total_time) %>% 
+      summarise(iccM = mean(icc.sub), 
+              sd = sd(icc.sub), 
+              icc.type = "ICC2")  %>% 
+    mutate(icc.type = "ICC2")
+
+
+  grot[[2]] =
+    df.icc.reliability.pairwise %>%
+    unnest(data) %>%
+    select(t, total_time, icc.sub) %>%
+    group_by(t, total_time) %>% 
+    summarise(mean(icc.sub), sd(icc.sub))  %>% 
+    mutate(icc.type = "ICC(2,1)")
+  
+  icc.comparison.between.datasets.regional = data.table::rbindlist(grot) %>% 
+    pivot_wider(names_from = t, 
+                values_from = c(iccM, sd))
+  
+   k2 = icc.comparison.between.datasets.regional  %>% 
+    kable(digits = 2) %>% 
+    kable_styling(full_width = FALSE) 
+  fname = here("data_reliability_long/results/stats_and_tables/model_comparison", 
+               paste("ICC_summary_comparison_between_datasets_regional","html", sep = "."))
+  save_kable(k2, fname)
+```
+
+
+### Consequences of longitudinal reliability (I): Sample Size Estimates.
+```{r}
+load(file.path(outreliability.comp, "icc.formula.rda"))
+oname = "model1"
+wrapper_table_effect_size(df.formula.icc, oname) 
+
+```
+
+###Consequences of longitudinal reliability (II): Misclassification of individual trajectories.
+
+```{r}
+
+  load(file.path(outreliability.comp, "icc.formula.rda"))
+  oname = "model1"
+   wrapper_table_individual_overlap(df.formula.icc, oname)
+
+```
+
+### Determinants of longitudinal reliability (I): Sample characteristics affect longitudinal reliability.
+```{r}
+load(file.path(outreliability.comp, "icc.formula.agegroup.rda"))
+oname = "model1"
+wrapper_table_agegroup(df.formula.icc, oname)
+```
+
+
+### Consequences of longitudinal reliability (III): Group membership based on trajectories. 
+```{r}
+
+oname = "model1"
+wrapper_table_maintenance(oname)
+  
+
+```
+
+## Methods section
+### descriptives 
+#### test retest dataset
+```{r descriptive tables}
+# Test-retest dataset
+oname = "test_retest"
+wrapper_table_descriptive_test_retest(oname)
+
+```
+

@@ -1,0 +1,350 @@
+---
+title: "p039_normative_long_merge_df"
+author: "DVP"
+date: "2022.12.12"
+output: html_document
+---
+
+# merge dataframe in single script. select train and test datasets. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(rio)
+library(ggridges)
+
+options(bitmapType = "cairo")
+outdir=here('data_reliability_long/df_mri/all')
+scriptsdir = here("scripts")
+source(here("scripts/reliability_scripts/helper_reliability_long_merge_df.r"))
+```
+
+```{r common files}
+df.merge = list()
+df.harmonize = import(file.path(outdir, 'harmonize_variables_globalvars.xlsx'))
+sex.rename = import(file.path(outdir, 'harmonize_variables_globalvars.xlsx'), sheet = "sex")
+
+df.pheno <- tibble(
+  phenos = c("MeanThickness", 
+             "CorticalArea", 
+             "CorticalVolume",
+             "SubCorticalVolume",
+             "SupraTentorialVolume"),
+  orig = list(
+    c("lh_MeanThickness_thickness", "rh_MeanThickness_thickness"),
+    c("lh_WhiteSurfArea_area","rh_WhiteSurfArea_area"),
+    c("lhCortexVol","rhCortexVol"), 
+    c("SubCortGrayVol"), 
+    c("SupraTentorialVolNotVent")))
+
+phenotypes  = df.pheno$phenos
+```
+
+## This R Markdown will merge neuroimaging date and prepare it for normative modelling. 
+### Fetch neuroimaging data for uio.
+```{r LCBC}
+## set up links
+site="uio"
+codesite = "10"
+
+df.out = set_links(site)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.uio.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for camcan
+```{r CamCan, warning=F}
+## set up links
+#site="ucam"
+#codesite = "11"
+
+#df.out = set_links(site)
+
+# rename data and prepare for normative modelling
+#df.merge[[site]] = prepare.ucam.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for mpib
+```{r MPIB}
+## set up links
+#site="mpib"
+#codesite = "12"
+
+#df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+#df.merge[[site]] = prepare.mpib.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for umu
+```{r Umu_Betula}
+## set up links
+site="umu"
+codesite = "13"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.umu.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for ub.
+```{r UB}
+## set up links
+site="ub"
+codesite = "14"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.ub.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for habs.
+```{r habs}
+## set up links
+site="habs"
+codesite = "20"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.habs.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for cognorm / ous
+```{r cognorm / ous}
+## set up links
+site="ous"
+codesite = "30"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.ous.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for aibl.
+```{r aibl}
+## set up links
+site="aibl"
+codesite = "21"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.aibl.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for adni.
+```{r adni}
+## set up links
+site="adni"
+codesite = "22"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.adni.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for preventAD.
+```{r preventAD}
+## set up links
+site="preventad"
+codesite = "23"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.preventad.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for wayne.
+```{r wayne}
+## set up links
+site="wayne"
+codesite = "24"
+
+df.out = set_links(site)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.wayne.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for oasis.
+```{r oasis}
+site = "oasis3"
+codesite = "25"
+
+df.out = set_links(site)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.oasis3.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for ukb.
+```{r ukb}
+## set up links
+site="ukb"
+codesite = "31"
+
+df.out = set_links(site)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.ukb.brainchart(df.out, site, codesite)
+```
+
+
+### merge data together and save
+```{r merge}
+df.merge = data.table::rbindlist(df.merge, idcol = "dataset")
+df.merge = 
+df.merge %>% 
+  mutate(sid = sub_id,
+         sub_id = paste(dataset, sub_id, sep = "-"),
+         rid = paste(dataset, rid, sep = "-")) # ensure unique identifier
+df.merge =
+  df.merge %>% 
+  mutate(sitenum = if_else(site == "ous_ousPrisma", 10002, sitenum),
+         site = if_else(site == "ous_ousPrisma", "uio_ousPrisma", site)) #ous and uio prisma share scanner and sequence
+
+for (i in 1:length(phenotypes)) {
+  df.merge = 
+    df.merge %>% 
+    mutate(!!df.pheno$phenos[[i]] := rowMeans(select(., all_of(df.pheno$orig[[i]]))))
+}
+
+
+df.merge.long = 
+  df.merge %>% 
+  group_by(rid) %>% 
+  mutate(n = n_distinct(age)) %>% 
+  filter(n > 1) 
+
+
+save(df.merge, 
+     df.merge.long,
+     file = file.path(outdir, "df.all.global.Rda"))
+
+```
+
+
+### check scanner info
+```{r check n scanners}
+# define min number of subjects for a site to be included
+# will select scans with 1) at least 25 longitudinal observations and 25 observations where at tp == 1 for a given subject
+thr.obs =15
+
+df.merge = df.merge %>% 
+  group_by(site) %>% 
+  mutate(nsite = n_distinct(sub_id)) %>% 
+  filter(nsite > thr.obs)
+
+df.merge.long = 
+df.merge.long %>% 
+  filter(site %in% unique(df.merge$site)) %>% 
+  group_by(rid) %>% 
+  mutate(nsub = n_distinct(sub_id)) %>% 
+  filter(nsub > 1) %>% 
+  ungroup()
+
+save(df.merge, 
+     df.merge.long,
+     file = file.path(outdir, "df.all.global.filt.Rda"))
+```
+
+
+### residualized and compute Z delta and Z intercept
+```{r compute normative scores}
+outdir=here('data_reliability_long/df_mri/all')
+model = 'main_gamm'
+phenotypes.gamm = phenotypes 
+
+
+
+# 1 apply on new scanners using tp1 as calibration
+scriptname =  here("scripts/reliability_scripts/submit_compute_gamm_Zchange.sh")
+
+for (i in 1:length(phenotypes.gamm)) {
+  system(paste(
+    "module purge;",
+    "sbatch",
+     scriptname, 
+     outdir, 
+     model,
+     paste0("'",phenotypes.gamm[i],"'"),
+     "T",
+     sep = " "))
+
+  
+  df.squeue = squeue("p274-didacvp","compute_gammchange")
+  print(paste("script running on sbatch, N:", length(df.squeue$V1)-1, as.character(i), phenotypes.gamm[i]), sep = " ")
+}
+```
+
+## merge all and estimate outliers
+```{r}
+analysis = 'main_gamm'
+df = 
+merge_normative_mri_data(outdir, 
+                         analysis, 
+                         phenotypes.gamm, 
+                         thr.time = 1.5, 
+                         thr.mad = 5, 
+                         thr.miss=.2,
+                         globalVars = T)
+
+save(df, file = file.path(outdir, "df.merged.global.Rda"))
+
+
+scriptname =  here("scripts/reliability_scripts/submit_impute_outlier_data.sh")
+system(paste(
+    "module purge;",
+    "sbatch",
+     scriptname, 
+     outdir, 
+     "delta",
+     "3",
+     "T",
+     sep = " "))
+
+system(paste(
+    "module purge;",
+    "sbatch",
+     scriptname, 
+     outdir, 
+     "mean",
+     "3",
+     "T",
+     sep = " "))
+```
+
+## merge computational parameters
+```{r computational parameters}
+model = 'main_gamm'
+model_parameters = lapply(phenotypes.gamm, 
+                          function(x) {import(file.path(outdir, model, x,"model_parameters.csv"))})
+names(model_parameters) = phenotypes.gamm
+model_parameters = data.table::rbindlist(model_parameters, idcol = "features") 
+write.csv(model_parameters, 
+          quote = F, 
+          row.names = F, 
+          file = here('data-raw/tabulated/parameters_reliability/full.sample_globalVars.csv'))
+```

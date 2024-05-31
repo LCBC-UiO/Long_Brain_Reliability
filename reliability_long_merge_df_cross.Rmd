@@ -1,0 +1,288 @@
+---
+title: "p039_normative_long_merge_df"
+author: "DVP"
+date: "2022.12.12"
+output: html_document
+---
+
+# merge dataframe in single script. select train and test datasets. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(rio)
+library(ggridges)
+
+options(bitmapType = "cairo")
+outdir=here('data_reliability_long/df_mri/all')
+scriptsdir = here("scripts")
+source(here("scripts/reliability_scripts/helper_reliability_long_merge_df.r"))
+```
+
+```{r common files}
+df.merge = list()
+df.harmonize = import(file.path(outdir, 'harmonize_variables.xlsx'))
+sex.rename = import(file.path(outdir, 'harmonize_variables.xlsx'), sheet = "sex")
+phenotypes = df.harmonize$normative_modelling[7:dim(df.harmonize)[1]]
+phenotypes.gamm = phenotypes
+```
+
+## This R Markdown will merge neuroimaging date and prepare it for normative modelling. 
+### Fetch neuroimaging data for uio.
+```{r LCBC}
+## set up links
+site="uio"
+codesite = "10"
+
+df.out = set_links(site)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.uio.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for umu 
+```{r Umu_Betula}
+## set up links
+site="umu"
+codesite = "13"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.umu.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for ub. 
+```{r UB}
+## set up links
+site="ub"
+codesite = "14"
+
+df.out = set_links(site)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.ub.brainchart(df.out, site, codesite)
+```
+
+
+
+### Fetch neuroimaging data for habs.
+```{r habs}
+## set up links
+site="habs"
+codesite = "20"
+
+df.out = set_links(site, T)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.habs.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for cognorm / ous
+```{r cognorm / ous}
+## set up links
+site="ous"
+codesite = "30"
+
+df.out = set_links(site, T)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.ous.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for aibl.
+```{r aibl}
+## set up links
+site="aibl"
+codesite = "21"
+
+df.out = set_links(site,T)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.aibl.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for adni.
+```{r adni}
+## set up links
+site="adni"
+codesite = "22"
+
+df.out = set_links(site,T)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.adni.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for preventAD.
+```{r preventAD}
+## set up links
+site="preventad"
+codesite = "23"
+
+df.out = set_links(site,T)
+
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.preventad.brainchart(df.out, site, codesite)
+```
+
+### Fetch neuroimaging data for wayne.
+```{r wayne}
+## set up links
+site="wayne"
+codesite = "24"
+
+df.out = set_links(site,T)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.wayne.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for oasis.
+```{r oasis}
+site = "oasis3"
+codesite = "25"
+
+df.out = set_links(site,T)
+
+# rename data and prepare for normative modelling
+df.merge[[site]] = prepare.oasis3.brainchart(df.out, site, codesite)
+```
+
+
+### Fetch neuroimaging data for ukb.
+```{r ukb}
+## set up links
+site="ukb"
+codesite = "31"
+
+df.out = set_links(site,T)
+
+# rename data and prepare for normative modelling
+#df.merge[[site]] = prepare.ukb.brainchart_link(df.out, site, codesite)
+df.merge[[site]] = prepare.ukb.brainchart(df.out, site, codesite)
+```
+
+
+### merge data together and save
+```{r merge}
+df.merge = data.table::rbindlist(df.merge, idcol = "dataset")
+df.merge = 
+df.merge %>% 
+  mutate(sid = sub_id,
+         sub_id = paste(dataset, sub_id, sep = "-"),
+         rid = paste(dataset, rid, sep = "-")) # ensure unique identifier
+df.merge =
+  df.merge %>% 
+  mutate(sitenum = if_else(site == "ous_ousPrisma", 10002, sitenum),
+         site = if_else(site == "ous_ousPrisma", "uio_ousPrisma", site)) #ous and uio prisma share scanner and sequence
+
+df.merge.long = 
+  df.merge %>% 
+  group_by(rid) %>% 
+  mutate(n = n_distinct(age)) %>% 
+  filter(n > 1) 
+
+# get some basic stats
+#mod.stats = stats.overview(df.merge.long, df.merge)
+
+save(df.merge, 
+     df.merge.long,
+     #mod.stats,
+     file = file.path(outdir, "df.all.cross.Rda"))
+
+```
+
+
+### check scanner info
+```{r check n scanners}
+# define min number of subjects for a site to be included
+# will select scans with 1) at least 25 longitudinal observations and 25 observations where at tp == 1 for a given subject
+thr.obs =15
+
+df.merge = df.merge %>% 
+  group_by(site) %>% 
+  mutate(nsite = n_distinct(sub_id)) %>% 
+  filter(nsite > thr.obs)
+
+df.merge.long = 
+df.merge.long %>% 
+  filter(site %in% unique(df.merge$site)) %>% 
+  group_by(rid) %>% 
+  mutate(nsub = n_distinct(sub_id)) %>% 
+  filter(nsub > 1) %>% 
+  ungroup()
+
+#mod.stats.filt = stats.overview(df.merge.long, df.merge)
+
+# plot raincloud-like plot
+gs = 
+  ggplot(df.merge.long, aes(x = age, y = dataset, fill = stat(x))) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis_c(name = "age", option = "C") +
+  scale_y_discrete(limits = unique(rev(df.merge.long$dataset))) +
+  theme_ridges(font_size = 13, grid = TRUE) + 
+  theme(legend.position = 'none',
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(hjust = 0.5))
+  
+ggsave( file = file.path(outdir, "raincloud.png"))
+gs
+
+save(df.merge, 
+     df.merge.long,
+     #mod.stats.filt,
+     file = file.path(outdir, "df.all.cross.filt.Rda"))
+```
+
+
+### residualized and compute Z delta and Z intercept
+```{r compute normative scores}
+outdir=here('data_reliability_long/df_mri/all')
+model = 'main_gamm'
+
+# 1 apply on new scanners using tp1 as calibration
+scriptname =  here("scripts/reliability_scripts/submit_compute_gamm_Zchange.sh")
+
+for (i in 1:length(phenotypes.gamm)) {
+  system(paste(
+    "module purge;",
+    "sbatch",
+     scriptname, 
+     outdir, 
+     model,
+     paste0("'",phenotypes.gamm[i],"'"),
+    "F", 
+    "T", 
+     sep = " "))
+
+  
+  df.squeue = squeue("p274-didacvp","compute_gammchange")
+  print(paste("script running on sbatch, N:", length(df.squeue$V1)-1, as.character(i), phenotypes.gamm[i]), sep = " ")
+}
+```
+
+## merge computational parameters
+```{r computational parameters}
+model = 'main_gamm'
+model_parameters = lapply(phenotypes.gamm, 
+                          function(x) {import(file.path(outdir, model, x,"model_parameters.cross.csv"))})
+names(model_parameters) = phenotypes.gamm
+model_parameters = data.table::rbindlist(model_parameters, idcol = "features") 
+write.csv(model_parameters, 
+          quote = F, 
+          row.names = F, 
+          file = here('data-raw/tabulated/parameters_reliability/full.sample.cross.csv'))
+```
