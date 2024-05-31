@@ -1,0 +1,448 @@
+---
+title: "Untitled"
+author: "DVP"
+date: "3/5/2023"
+output: html_document
+---
+
+# set vars
+```{r setup}
+library(tidyverse)
+library(here)
+library(rio)
+library(ggcorrplot)
+library(patchwork)
+
+odir = here("data-raw/tabulated/parameters_reliability")
+df.harmonize = import(here('data_reliability_long/df_mri/all/harmonize_variables.xlsx'))
+phenotypes = df.harmonize$normative_modelling[7:dim(df.harmonize)[1]]
+phenotypes[grepl("Thalamus", phenotypes)] = c("Left-Thalamus" , "Right-Thalamus")
+
+
+# global vars to be computed
+df.pheno <- tibble(
+  phenos = c("MeanThickness", 
+             "CorticalArea", 
+             "CorticalVolume",
+             "SubCorticalVolume",
+             "SupraTentorialVolume"),
+  orig = list(
+    c("lh_MeanThickness_thickness", "rh_MeanThickness_thickness"),
+    c("lh_WhiteSurfArea_area","rh_WhiteSurfArea_area"),
+    c("lhCortexVol","rhCortexVol"), 
+    c("SubCortGrayVol"), 
+    c("SupraTentorialVolNotVent")))
+
+idp = df.pheno$orig %>% simplify()
+```
+
+# define functions
+```{r define function desterieux}
+fetch_aparc_data_s2c = function(idir) {
+lfiles = list.files(idir)
+subs = 
+  strsplit(lfiles,"sub-") %>% 
+  reduce(rbind) %>% 
+  .[,2] %>% 
+  substr(., 1,7) %>% 
+  unique()
+
+df.mri = lapply(lfiles, function(x) { import(file.path(idir, x))})
+for (df in 1:length(df.mri)) {
+  names(df.mri[[df]])[1] <- "input"
+}
+names(df.mri) = lfiles
+
+df.mri.all = list()
+for (i in 1:length(subs)) {
+  idx = lfiles[grep(subs[i], lfiles)]
+  x = df.mri[idx]
+  df.mri.all[[i]] = x %>% reduce(cbind)
+}
+names(df.mri.all) = subs
+df.mri = data.table::rbindlist(df.mri.all, idcol = "subs")
+return(df.mri)
+}
+
+work_with_residuals = function(db) {
+  # use this for error
+  x = 
+      db %>% 
+        group_by(subs) %>% 
+        filter(n > 1)  %>% 
+    pivot_longer(-c(subs, input, wave_code, n), 
+                      names_to = "features", 
+                      values_to = "values") %>% 
+    mutate(sess = gsub("ses-0", "", input), 
+           sess = gsub(".long.base", "", sess),
+           sess = as.numeric(sess)) %>% 
+    arrange(subs,wave_code)
+  
+  mod =
+  x %>% 
+  group_by(subs, features) %>% 
+  mutate(ref = first(values),
+         sesref = first(sess),
+         errM = values - ref) %>% 
+  filter(!sesref == sess) %>% 
+  mutate(pct.err = 100* errM / ref) %>% 
+  ungroup() %>% 
+  group_by(features) %>% 
+  mutate(pctM = median(abs(pct.err), na.rm = T),
+         pctmad = mad(abs(pct.err), na.rm = T), 
+         abspcterr = if_else(abs(pct.err) > pctM +  8*pctmad,NaN,abs(pct.err)))
+
+
+mod.sum = 
+  mod %>% group_by(features) %>% 
+  summarise(pct.err.mean2 = mean(abs(pct.err), na.rm =T),
+            pct.err.mean = mean(abspcterr, na.rm =T),
+            pct.err.median = median(abs(pct.err), na.rm =T),
+            meanV = mean(ref), 
+            sdV = sd(ref))
+
+df.out = list()
+df.out$mod = mod
+df.out$mod.sum.rid = mod.sum.RID
+df.out$mod.sum = mod.sum
+  return(df.out)
+}
+```
+
+# fetch data
+```{r fetch data}
+df = list()
+idir = here("data-raw/tabulated/s2c/mri_fs7_noflair/desikan")
+df$df = fetch_aparc_data_s2c(idir)
+df$df = df$df %>% 
+  select(unique(colnames(.)))
+```
+
+##
+```{r}
+dat = import(here("data-raw/tabulated/s2c/S2C_data.csv"))
+dat = 
+  dat %>% 
+  rename("subs" = "subject_id") %>% 
+  mutate(subs = as.character(subs))
+
+df$df = 
+  df$df %>% 
+  mutate(wave_code = if_else(startsWith(input, "ses-01"), 1, 
+                             if_else(startsWith(input, "ses-02"), 2, 3)))
+
+
+df$df = 
+  df$df %>% 
+  group_by(subs) %>% 
+  filter(!wave_code == 3) %>% 
+  mutate(n = n_distinct(wave_code)) %>% 
+  filter(n == 2) %>% 
+  ungroup()
+```
+
+# get error etimates
+```{r get error estimates}
+# add global variables
+for (i in 1:length(df.pheno$phenos)) {
+  df$df = 
+    df$df %>% 
+    mutate(!!df.pheno$phenos[[i]] := rowMeans(select(., all_of(df.pheno$orig[[i]]))))
+}
+
+s2c.error = work_with_residuals(df$df)
+df.out = s2c.error$mod.sum
+
+idx = match(phenotypes,df.out$features)
+df.out = df.out[idx, ]
+save(
+  df.out,
+  file = file.path(odir, "s2c_data_updated.rda"))
+
+write.table(
+  df.out,
+  quote = F,
+  row.names = F,
+  col.names = F, 
+  file = file.path(odir, "s2c_data_updated.csv"))
+
+
+df.out = s2c.error$mod.sum
+idx = match(df.pheno$phenos,df.out$features)
+df.out = df.out[idx, ]
+save(
+  df.out,
+  file = file.path(odir, "s2c_data_updated_globalVars.rda"))
+
+write.table(
+  df.out,
+  quote = F,
+  row.names = F,
+  col.names = F, 
+  file = file.path(odir, "s2c_data_updated_globalVars.csv"))
+```
+
+
+
+#### maclarren
+```{r setup}
+
+#here()
+#source(here("scripts/normative_scripts/helper_normative_long_prepare_df.r"))
+mrifiles = c("lh.aparc.area.txt",
+             "lh.aparc.thickness.txt",
+             "lh.aparc.volume.txt",
+             "rh.aparc.area.txt",
+             "rh.aparc.thickness.txt",
+             "rh.aparc.volume.txt",
+             "aseg.txt")
+
+sitedir = (here("data-raw/tabulated/maclaren"))
+
+ df.mri = lapply(mrifiles, function(x) { import(file.path(sitedir, "mri_fs7", "desikan", x))})
+  for (df in 1:length(df.mri)) {
+    names(df.mri[[df]])[1] <- "input"
+  }
+  df.mri = purrr::reduce(df.mri, dplyr::left_join, by = "input")
+  
+  df.mri = 
+    df.mri %>% 
+    separate(input, c("RID",
+                      "grot2"),
+             sep = "ses", 
+             remove = F) %>% 
+    mutate(visit = substr(grot2, 1,2) %>% as.numeric())
+```
+
+```{r}
+
+db = df.mri 
+
+# add global variables
+for (i in 1:length(df.pheno$phenos)) {
+  db = 
+    db %>% 
+    mutate(!!df.pheno$phenos[[i]] := rowMeans(select(., all_of(df.pheno$orig[[i]]))))
+}
+
+
+x = 
+      db %>% 
+        rename("subs" = "RID") %>%
+        select(-grot2) %>% 
+        group_by(subs) %>% 
+        mutate(n = n_distinct(input)) %>% 
+        filter(n > 1)  %>% 
+    pivot_longer(-c(subs, input, visit), 
+                      names_to = "features", 
+                      values_to = "values") %>% 
+   arrange(subs,visit)
+  
+mod =
+  x %>% 
+  group_by(subs, features) %>% 
+  summarise(meanV = mean(values), 
+          medianV = median(values), 
+          madV = mad(values), 
+          sdV = sd(values)) %>%
+  mutate(cv.r = 100*madV/medianV, 
+         cv.r2 = 100*madV/meanV, 
+         cv = 100*sdV/meanV)  
+  
+mod.sum = 
+    mod %>% 
+    ungroup() %>% 
+    group_by(features) %>% 
+    summarise(cv.r = mean(cv.r, na.rm =T),
+            cv.r2 = mean(cv.r2, na.rm = T), 
+            cv = mean(cv, na.rm = T))
+
+df.out = list()
+df.out$db = x
+df.out$mod = mod
+df.out$mod.sum = mod.sum
+
+df.out = df.out$mod.sum
+idx = match(phenotypes,grot)
+df.out = df.out[idx, ]
+save(
+  df.out,
+  file = file.path(odir, "maclaren_data_updated.rda"))
+
+write.table(
+  df.out,
+  quote = F,
+  row.names = F,
+  col.names = F, 
+  file = file.path(odir, "maclaren_data_updated.csv"))
+
+
+df.out = mod.sum
+idx = match(df.pheno$phenos,df.out$features)
+df.out = df.out[idx, ]
+save(
+  df.out,
+  file = file.path(odir, "maclaren_data_updated_globalVars.rda"))
+
+write.table(
+  df.out,
+  quote = F,
+  row.names = F,
+  col.names = F, 
+  file = file.path(odir, "maclaren_data_updated_globalVars.csv"))
+```
+
+# oasis reliability
+```{r}
+
+#here()
+#source(here("scripts/normative_scripts/helper_normative_long_prepare_df.r"))
+mrifiles = c("lh.aparc.area.txt",
+             "lh.aparc.thickness.txt",
+             "lh.aparc.volume.txt",
+             "rh.aparc.area.txt",
+             "rh.aparc.thickness.txt",
+             "rh.aparc.volume.txt",
+             "aseg.txt")
+
+sitedir = (here("data-raw/tabulated/oasis_reliability"))
+
+ df.mri = lapply(mrifiles, function(x) { import(file.path(sitedir, "mri_fs7", "desikan", x))})
+  for (df in 1:length(df.mri)) {
+    names(df.mri[[df]])[1] <- "input"
+  }
+  df.mri = purrr::reduce(df.mri, dplyr::left_join, by = "input")
+  
+  df.mri = 
+    df.mri %>% 
+    separate(input, c("RID",
+                      "grot2"),
+             sep = "ses", 
+             remove = F) %>% 
+    mutate(visit = substr(grot2, 1,2) %>% as.numeric(), 
+           ID = paste0(RID, "_MR", as.character(visit)), 
+           ID = gsub("sub-", "", ID))
+  
+dat = import(file.path(sitedir, "oasis_cross-sectional-reliability.csv"))
+
+x = anti_join(dat, df.mri)
+```
+
+
+# preventad_reliabiity
+```{r}
+
+#here()
+#source(here("scripts/normative_scripts/helper_normative_long_prepare_df.r"))
+mrifiles = c("lh.aparc.area.txt",
+             "lh.aparc.thickness.txt",
+             "lh.aparc.volume.txt",
+             "rh.aparc.area.txt",
+             "rh.aparc.thickness.txt",
+             "rh.aparc.volume.txt",
+             "aseg.txt")
+
+sitedir = (here("data-raw/tabulated/preventad_reliability"))
+
+ df.mri = lapply(mrifiles, function(x) { import(file.path(sitedir, "mri_fs7", "desikan", x))})
+  for (df in 1:length(df.mri)) {
+    names(df.mri[[df]])[1] <- "input"
+  }
+  df.mri = purrr::reduce(df.mri, dplyr::left_join, by = "input")
+  
+  df.mri = 
+    df.mri %>% 
+    separate(input, c("RID",
+                      "grot2"),
+             sep = "ses", 
+             remove = F) %>% 
+    mutate(visit = substr(grot2, 1,2) %>% as.numeric())
+  
+#dat = import(file.path(sitedir, "UM_phenotypic_data.csv"))
+```
+
+```{r}
+
+db = df.mri 
+
+# add global variables
+for (i in 1:length(df.pheno$phenos)) {
+  db = 
+    db %>% 
+    mutate(!!df.pheno$phenos[[i]] := rowMeans(select(., all_of(df.pheno$orig[[i]]))))
+}
+
+
+x = 
+      db %>% 
+        rename("subs" = "RID") %>%
+        select(-grot2) %>% 
+        group_by(subs) %>% 
+        mutate(n = n_distinct(input)) %>% 
+        filter(n > 1)  %>% 
+    pivot_longer(-c(subs, input, visit), 
+                      names_to = "features", 
+                      values_to = "values") %>% 
+   arrange(subs,visit)
+  
+
+
+ mod =
+  x %>% 
+  group_by(subs, features) %>% 
+  mutate(ref = first(values),
+         sesref = first(visit),
+         errM = values - ref) %>% 
+  filter(!sesref == visit) %>% 
+  mutate(pct.err = 100* errM / ref) %>% 
+  ungroup() %>% 
+  group_by(features) %>% 
+  mutate(pctM = median(abs(pct.err), na.rm = T),
+         pctmad = mad(abs(pct.err), na.rm = T), 
+         abspcterr = if_else(abs(pct.err) > pctM +  8*pctmad,NaN,abs(pct.err)))
+
+ 
+
+mod.sum = 
+    mod %>% 
+    ungroup() %>% 
+    group_by(features) %>% 
+    summarise(cv.r = mean(cv.r, na.rm =T),
+            cv.r2 = mean(cv.r2, na.rm = T), 
+            cv = mean(cv, na.rm = T))
+
+df.out = list()
+df.out$db = x
+df.out$mod = mod
+df.out$mod.sum = mod.sum
+
+df.out = df.out$mod.sum
+idx = match(phenotypes,grot)
+df.out = df.out[idx, ]
+save(
+  df.out,
+  file = file.path(odir, "maclaren_data_updated.rda"))
+
+write.table(
+  df.out,
+  quote = F,
+  row.names = F,
+  col.names = F, 
+  file = file.path(odir, "maclaren_data_updated.csv"))
+
+
+df.out = mod.sum
+idx = match(df.pheno$phenos,df.out$features)
+df.out = df.out[idx, ]
+save(
+  df.out,
+  file = file.path(odir, "maclaren_data_updated_globalVars.rda"))
+
+write.table(
+  df.out,
+  quote = F,
+  row.names = F,
+  col.names = F, 
+  file = file.path(odir, "maclaren_data_updated_globalVars.csv"))
+```
+

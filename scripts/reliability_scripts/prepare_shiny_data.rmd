@@ -1,0 +1,43 @@
+---
+title: "project2shiny"
+author: "DVP"
+date: '2024-03-07'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+```
+
+## R Markdown
+
+```{r cars}
+idir = here('data_reliability_long/df_mri/all')
+odir = file.path(idir, "shiny")
+dir.create(odir)
+```
+
+## coppy basic data
+```{r pressure, echo=FALSE}
+file.copy(file.path(idir, "computational", "icc.formula.rda"), odir, overwrite = T)
+file.copy(file.path(idir, "computational", "icc_reliability_between_samples.Rda"), odir, overwrite = T)
+file.copy(file.path(idir, "computational", "icc.formula.global.rda"), odir, overwrite = T)
+file.copy(file.path(idir, "computational",  "icc.formula.agegroup.rda" ), odir, overwrite = T)
+file.copy(file.path(idir, "computational",  "icc.formula.full.rda" ), odir, overwrite = T)
+file.copy(file.path(idir, "empirical", "df.empirical_summary.Rda"), odir)
+```
+
+
+```{r}
+lfiles = list.files(file.path(idir, "computational","individual_trajectories"))
+df = list()
+for (i in lfiles) {
+  print(i)
+  load(file.path(idir, "computational","individual_trajectories", i))
+  df[[i]] = P_extreme
+}
+df = data.table::rbindlist(df,idcol = "feature")
+save(df, file = file.path(odir, "P_extreme.Rda"))
+```

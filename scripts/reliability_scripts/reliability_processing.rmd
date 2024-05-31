@@ -1,0 +1,324 @@
+---
+title: "Untitled"
+author: "DVP"
+date: "3/5/2023"
+output: html_document
+---
+
+# set vars
+```{r sets}
+library(tidyverse)
+library(here)
+library(rio)
+
+odir = here("data-raw/tabulated/parameters_reliability")
+source(here("scripts/reliability_scripts/helper_reliability_processing.r"))
+```
+
+# define global data-frames and 
+
+```{r s}
+df.harmonize = import(here('data_reliability_long/df_mri/all/harmonize_variables.xlsx'))
+phenotypes = df.harmonize$normative_modelling[7:dim(df.harmonize)[1]]
+phenotypes[grepl("Thalamus", phenotypes)] = c("Left-Thalamus" , "Right-Thalamus")
+
+# global vars to be computed
+df.pheno <- tibble(
+  phenos = c("MeanThickness", 
+             "CorticalArea", 
+             "CorticalVolume",
+             "SubCorticalVolume",
+             "SupraTentorialVolume"),
+  orig = list(
+    c("lh_MeanThickness_thickness", "rh_MeanThickness_thickness"),
+    c("lh_WhiteSurfArea_area","rh_WhiteSurfArea_area"),
+    c("lhCortexVol","rhCortexVol"), 
+    c("SubCortGrayVol"), 
+    c("SupraTentorialVolNotVent")))
+
+idp = df.pheno$orig %>% simplify()
+
+mrifiles = c("lh.aparc.area.txt",
+             "lh.aparc.thickness.txt",
+             "lh.aparc.volume.txt",
+             "rh.aparc.area.txt",
+             "rh.aparc.thickness.txt",
+             "rh.aparc.volume.txt",
+             "aseg.txt")
+```
+
+
+
+# s2c - processing
+```{r fetch data}
+site = "s2c"
+sitedir = here("data-raw/tabulated", site)
+
+
+# open subject. keep mri from those with demographic data
+subs = import(file.path(sitedir,"S2C_data.csv"))
+subs = 
+  subs %>% 
+  rename("subs" = "subject_id", 
+         "visit" = "wave_code") %>% 
+  mutate(subs = as.character(subs)) %>% 
+  select(subs, visit)
+
+# fetch mri data. remove third data point. remove subjects with only one data point
+df = fetch_aparc_data_s2c(file.path(sitedir, "mri_fs7_noflair", "desikan"))
+df = df %>% 
+  select(unique(colnames(.))) %>% 
+  mutate(visit = if_else(startsWith(input, "ses-01"), 1, 
+                             if_else(startsWith(input, "ses-02"), 2, 3)))
+
+df = inner_join(df, 
+                subs) %>% 
+  group_by(subs) %>% 
+  filter(!visit == 3) %>% 
+  mutate(n = n_distinct(visit)) %>% 
+  filter(n == 2) %>% 
+  ungroup() %>% 
+  select(-n)
+
+df = add_global_variables(df, df.pheno)
+
+# compute test-retest
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno)
+wrapper_demog_s2c()
+```
+# maclaren - processing
+```{r maclaren}
+site = "maclaren"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_within(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno)
+wrapper_demog_maclaren()
+```
+
+# oasis reliability
+```{r oasis}
+site = "oasis_reliability"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno)
+wrapper_demog_oasis()
+```
+
+# preventad_reliabiity
+```{r preventad}
+site = "preventad_reliability"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno)
+wrapper_demog_preventad()
+```
+
+# hnu
+```{r}
+site = "hnu"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_within(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno)
+wrapper_demog_hnu()
+```
+
+# gsp
+```{r gsp}
+site = "gsp"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno)
+wrapper_demog_gsp()
+```
+
+
+# merge
+```{r}
+sites = c("hnu", 
+          "gsp",
+          "preventad_reliability",
+          "oasis_reliability",
+          "maclaren",
+          "s2c")
+
+lfiles = paste0(sites, "_data.csv")
+merge_data(lfiles, odir, "all_me", phenotypes)
+
+lfiles = paste0(sites, "_data_globalVars.csv")
+merge_data(lfiles, odir, "all_me_globalVars", df.pheno$phenos)
+```
+## merge_demographics
+```{r}
+sites = c("hnu", 
+          "gsp",
+          "preventad_reliability",
+          "oasis_reliability",
+          "maclaren",
+          "s2c")
+
+dat = list()
+for (i in sites) {
+  load( file.path(odir, "demog", paste(i, "rda", sep = "."))) 
+  dat[[i]] = dat.demog
+} 
+dat.demog = 
+data.table::rbindlist(dat, idcol = "dataset")
+save(dat.demog, file = file.path(odir, "demog", paste("all", "rda", sep =".")))
+```
+
+
+# Cross-sectional pipeline
+## s2c - processing
+```{r fetch data}
+site = "s2c"
+sitedir = here("data-raw/tabulated", site)
+
+
+# open subject. keep mri from those with demographic data
+subs = import(file.path(sitedir,"S2C_data.csv"))
+subs = 
+  subs %>% 
+  rename("subs" = "subject_id", 
+         "visit" = "wave_code") %>% 
+  mutate(subs = as.character(subs)) %>% 
+  select(subs, visit)
+
+# fetch mri data. remove third data point. remove subjects with only one data point
+df = fetch_aparc_data_s2c(file.path(sitedir, "mri_fs7_noflair", "cross"))
+df = df %>% 
+  select(unique(colnames(.))) %>% 
+  mutate(visit = if_else(startsWith(input, "./ses-01"), 1, 
+                             if_else(startsWith(input, "./ses-02"), 2, 3)))
+
+
+df = inner_join(df, 
+                subs) %>% 
+  group_by(subs) %>% 
+  filter(!visit == 3) %>% 
+  mutate(n = n_distinct(visit)) %>% 
+  filter(n == 2) %>% 
+  ungroup() %>% 
+  select(-n)
+
+df = add_global_variables(df, df.pheno)
+
+# compute test-retest
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno, T)
+```
+
+## maclaren
+```{r maclaren}
+site = "maclaren"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles, T)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_within(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno, T)
+```
+
+## oasis reliability
+```{r oasis}
+site = "oasis_reliability"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles, T)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno, T)
+```
+
+## preventad_reliabiity
+```{r preventad}
+site = "preventad_reliability"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles, T)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno, T)
+```
+
+## hnu
+```{r}
+site = "hnu"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles, T)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_within(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno, T)
+```
+## gsp
+```{r gsp}
+site = "gsp"
+sitedir = here("data-raw/tabulated", site)
+
+df = fetch_mri_standard(sitedir, mrifiles, T)
+df = add_global_variables(df, df.pheno)
+dat = test_retest_error_2tp(df)
+save_measurment_error_data(odir, site, dat, phenotypes, df.pheno, T)
+```
+
+## merge
+```{r}
+sites = c("hnu", 
+          "gsp",
+          "preventad_reliability",
+          "oasis_reliability",
+          "maclaren",
+          "s2c")
+
+lfiles = paste0(sites, "_data.csv")
+merge_data(lfiles, odir, "all_me", phenotypes, T)
+
+lfiles = paste0(sites, "_data_globalVars.csv")
+merge_data(lfiles, odir, "all_me_globalVars", df.pheno$phenos, T)
+```
+
+# not run
+```{r}
+svars = names(df)[4:5]
+mod = 
+  df %>% 
+  group_by(site) %>% 
+  summarise_at(vars(svars), c(mean = mean, median = median, sd = sd , mad = mad))
+kableExtra::kable(mod, digits = 2)
+View(mod)
+```
+
+```{r}
+head(df)
+
+df.wide = 
+df %>% 
+  select(site, 
+         features, 
+         pct.err.mean) %>% 
+  pivot_wider(names_from = "site", 
+              values_from = "pct.err.mean")
+
+library(psych)
+mod = ICC(df.wide[,-1])
+mod
+library(GGally)
+ggpairs(df.wide[,-1])
+```
+
